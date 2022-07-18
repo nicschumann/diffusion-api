@@ -34,7 +34,7 @@ def process_pending_queue(jobs, completed):
         print(f'invalid model specified: {conf.model}')
         return
 
-    logger.info('model loaded.')
+    logger.debug(f'\'{conf.model}\' loaded.')
 
     try:
         while True:

@@ -16,7 +16,8 @@ from pydantic import BaseModel
 import clip_sample
 import cfg_sample
 from .auth import check_credentials
-from .models import ModelConfiguration, JobRequest, LogConfig, VALID_SAMPLERS
+from .models import ModelConfiguration, JobRequest, LogConfig
+from .config import VALID_SAMPLERS, MAX_QUEUE_LENGTH
 from .sampling import process_pending_queue
 
 import logging
@@ -25,7 +26,7 @@ from logging.config import dictConfig
 dictConfig(LogConfig().dict())
 logger = logging.getLogger('gen-api')
 
-jobs = Queue()
+jobs = Queue(maxsize=MAX_QUEUE_LENGTH)
 completed = None
 inference_thread = None
 app = FastAPI()
@@ -48,18 +49,20 @@ async def stop_background_processes():
 
 
 # routes
-@app.get("/")
-async def root(credentials: HTTPBasicCredentials = Depends(check_credentials)):
-    return {'hello': 'world'}
-
-
-@app.post("/prompt", status_code=status.HTTP_201_CREATED)
+@app.post("/jobs/new", status_code=status.HTTP_201_CREATED)
 async def prompt(job_request: JobRequest, credentials: HTTPBasicCredentials = Depends(check_credentials)):
+    if jobs.qsize() >= MAX_QUEUE_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The job queue is full! Please try again shortly.",
+            headers={'Retry-After': 30}
+        )
 
     jid = str(uuid4())
 
     req = {
         'jid': jid,
+        'author': credentials.username,
         'status': 'Not Started',
         'prompts': job_request.prompts,
         'seed': job_request.seed,
@@ -94,17 +97,30 @@ async def prompt(job_request: JobRequest, credentials: HTTPBasicCredentials = De
     return req
 
 
-@app.get("/job/{jid}/status")
+@app.get("/jobs/{jid}/status")
 async def job(jid : str, credentials: HTTPBasicCredentials = Depends(check_credentials)):
     try:
         job = completed[jid]
         return job
 
     except KeyError:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+
+@app.get("/jobs/list")
+async def joblist(credentials: HTTPBasicCredentials = Depends(check_credentials)):
+    jobs = completed.values()
+    jobs = [*filter(lambda x: x['author'] == credentials.username, jobs)]
+
+    return {
+        'author': credentials.username,
+        'jobs': jobs
+    }
 
 
-@app.get("/job/{jid}/results/{index}.png")
+@app.get("/jobs/{jid}/results/{index}.png")
 async def image(jid : str, index : int, credentials: HTTPBasicCredentials = Depends(check_credentials)):
     try:
         job = completed[jid]
@@ -113,10 +129,19 @@ async def image(jid : str, index : int, credentials: HTTPBasicCredentials = Depe
                 path = f'output/{jid}_{index:05}.png'
                 return FileResponse(path)
             else:
-                raise HTTPException(status_code=404, detail=f"Index {index} out of range")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Index {index} out of range"
+                )
 
         else:
-            raise HTTPException(status_code=404, detail="Job not started")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Job not started"
+            )
 
     except KeyError:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )

@@ -2,15 +2,6 @@ from typing import List, Tuple, Union
 from dataclasses import dataclass
 from pydantic import BaseModel
 
-VALID_SAMPLERS = [
-    'ddpm',
-    'ddim',
-    'prk',
-    'plms',
-    'pie',
-    'plms2',
-    'iplms'
-]
 
 @dataclass
 class ModelConfiguration:
@@ -42,7 +33,7 @@ class JobRequest(BaseModel):
 
 class LogConfig(BaseModel):
     LOGGER_NAME : str = "gen-api"
-    LOG_FORMAT : str = "%(levelprefix)s %(asctime)s | %(message)s"
+    LOG_FORMAT : str = "%(levelprefix)s worker: %(asctime)s | %(message)s"
     LOG_LEVEL : str = "DEBUG"
 
     version = 1
