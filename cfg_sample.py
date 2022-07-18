@@ -36,50 +36,14 @@ def resize_and_center_crop(image, size):
     return TF.center_crop(image, size[::-1])
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument('prompts', type=str, default=[], nargs='*',
-                   help='the text prompts to use')
-    p.add_argument('--images', type=str, default=[], nargs='*', metavar='IMAGE',
-                   help='the image prompts')
-    p.add_argument('--batch-size', '-bs', type=int, default=1,
-                   help='the number of images per batch')
-    p.add_argument('--checkpoint', type=str,
-                   help='the checkpoint to use')
-    p.add_argument('--device', type=str,
-                   help='the device to use')
-    p.add_argument('--eta', type=float, default=0.,
-                   help='the amount of noise to add during sampling (0-1)')
-    p.add_argument('--init', type=str,
-                   help='the init image')
-    p.add_argument('--method', type=str, default='plms',
-                   choices=['ddpm', 'ddim', 'prk', 'plms', 'pie', 'plms2', 'iplms'],
-                   help='the sampling method to use')
-    p.add_argument('--model', type=str, default='cc12m_1_cfg', choices=['cc12m_1_cfg'],
-                   help='the model to use')
-    p.add_argument('-n', type=int, default=1,
-                   help='the number of images to sample')
-    p.add_argument('--seed', type=int, default=0,
-                   help='the random seed')
-    p.add_argument('--size', type=int, nargs=2,
-                   help='the output image size')
-    p.add_argument('--starting-timestep', '-st', type=float, default=0.9,
-                   help='the timestep to start at (used with init images)')
-    p.add_argument('--steps', type=int, default=50,
-                   help='the number of timesteps')
-    args = p.parse_args()
-
+def prepare(args):
     if args.device:
         device = torch.device(args.device)
     else:
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    print('Using device:', device)
 
     model = get_model(args.model)()
-    _, side_y, side_x = model.shape
-    if args.size:
-        side_x, side_y = args.size
+
     checkpoint = args.checkpoint
     if not checkpoint:
         checkpoint = MODULE_DIR / f'checkpoints/{args.model}.pth'
@@ -92,6 +56,18 @@ def main():
     clip_model.eval().requires_grad_(False)
     normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
                                      std=[0.26862954, 0.26130258, 0.27577711])
+
+    return device, model, clip_model, normalize
+
+
+def sample(jid, args, model_data, callback=(lambda info: info), quiet=False):
+    sampling.set_logging_state(quiet)
+
+    device, model, clip_model, normalize = model_data
+
+    _, side_y, side_x = model.shape
+    if args.size:
+        side_x, side_y = args.size
 
     if args.init:
         init = Image.open(utils.fetch(args.init)).convert('RGB')
@@ -132,19 +108,19 @@ def main():
 
     def run(x, steps):
         if args.method == 'ddpm':
-            return sampling.sample(cfg_model_fn, x, steps, 1., {})
+            return sampling.sample(cfg_model_fn, x, steps, 1., {}, callback=callback)
         if args.method == 'ddim':
-            return sampling.sample(cfg_model_fn, x, steps, args.eta, {})
+            return sampling.sample(cfg_model_fn, x, steps, args.eta, {}, callback=callback)
         if args.method == 'prk':
-            return sampling.prk_sample(cfg_model_fn, x, steps, {})
+            return sampling.prk_sample(cfg_model_fn, x, steps, {}, callback=callback)
         if args.method == 'plms':
-            return sampling.plms_sample(cfg_model_fn, x, steps, {})
+            return sampling.plms_sample(cfg_model_fn, x, steps, {}, callback=callback)
         if args.method == 'pie':
-            return sampling.pie_sample(cfg_model_fn, x, steps, {})
+            return sampling.pie_sample(cfg_model_fn, x, steps, {}, callback=callback)
         if args.method == 'plms2':
-            return sampling.plms2_sample(cfg_model_fn, x, steps, {})
+            return sampling.plms2_sample(cfg_model_fn, x, steps, {}, callback=callback)
         if args.method == 'iplms':
-            return sampling.iplms_sample(cfg_model_fn, x, steps, {})
+            return sampling.iplms_sample(cfg_model_fn, x, steps, {}, callback=callback)
         assert False
 
     def run_all(n, batch_size):
@@ -155,11 +131,11 @@ def main():
             steps = steps[steps < args.starting_timestep]
             alpha, sigma = utils.t_to_alpha_sigma(steps[0])
             x = init * alpha + x * sigma
-        for i in trange(0, n, batch_size):
+        for i in trange(0, n, batch_size, disable=quiet):
             cur_batch_size = min(n - i, batch_size)
             outs = run(x[i:i+cur_batch_size], steps)
             for j, out in enumerate(outs):
-                utils.to_pil_image(out).save(f'out_{i + j:05}.png')
+                utils.to_pil_image(out).save(f'output/{jid}_{i + j:05}.png')
 
     try:
         run_all(args.n, args.batch_size)
@@ -168,4 +144,41 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument('prompts', type=str, default=[], nargs='*',
+                   help='the text prompts to use')
+    p.add_argument('--images', type=str, default=[], nargs='*', metavar='IMAGE',
+                   help='the image prompts')
+    p.add_argument('--batch-size', '-bs', type=int, default=1,
+                   help='the number of images per batch')
+    p.add_argument('--checkpoint', type=str,
+                   help='the checkpoint to use')
+    p.add_argument('--device', type=str,
+                   help='the device to use')
+    p.add_argument('--eta', type=float, default=0.,
+                   help='the amount of noise to add during sampling (0-1)')
+    p.add_argument('--init', type=str,
+                   help='the init image')
+    p.add_argument('--method', type=str, default='plms',
+                   choices=['ddpm', 'ddim', 'prk', 'plms', 'pie', 'plms2', 'iplms'],
+                   help='the sampling method to use')
+    p.add_argument('--model', type=str, default='cc12m_1_cfg', choices=['cc12m_1_cfg'],
+                   help='the model to use')
+    p.add_argument('-n', type=int, default=1,
+                   help='the number of images to sample')
+    p.add_argument('--seed', type=int, default=0,
+                   help='the random seed')
+    p.add_argument('--size', type=int, nargs=2,
+                   help='the output image size')
+    p.add_argument('--starting-timestep', '-st', type=float, default=0.9,
+                   help='the timestep to start at (used with init images)')
+    p.add_argument('--steps', type=int, default=50,
+                   help='the number of timesteps')
+    args = p.parse_args()
+
+    model_data = prepare(args)
+
+    jid = 1
+
+    sample(jid, args, model_data)

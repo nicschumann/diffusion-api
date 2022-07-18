@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 """CLIP guided sampling from a diffusion model."""
-
+import numpy as np
 import argparse
+from imageio import imwrite
 from functools import partial
 from pathlib import Path
 
@@ -76,57 +77,14 @@ def make_cond_model_fn(model, cond_fn):
         return v
     return cond_model_fn
 
-
-def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument('prompts', type=str, default=[], nargs='*',
-                   help='the text prompts to use')
-    p.add_argument('--images', type=str, default=[], nargs='*', metavar='IMAGE',
-                   help='the image prompts')
-    p.add_argument('--batch-size', '-bs', type=int, default=1,
-                   help='the number of images per batch')
-    p.add_argument('--checkpoint', type=str,
-                   help='the checkpoint to use')
-    p.add_argument('--clip-guidance-scale', '-cs', type=float, default=500.,
-                   help='the CLIP guidance scale')
-    p.add_argument('--cutn', type=int, default=16,
-                   help='the number of random crops to use')
-    p.add_argument('--cut-pow', type=float, default=1.,
-                   help='the random crop size power')
-    p.add_argument('--device', type=str,
-                   help='the device to use')
-    p.add_argument('--eta', type=float, default=0.,
-                   help='the amount of noise to add during sampling (0-1)')
-    p.add_argument('--init', type=str,
-                   help='the init image')
-    p.add_argument('--method', type=str, default='ddpm',
-                   choices=['ddpm', 'ddim', 'prk', 'plms', 'pie', 'plms2', 'iplms'],
-                   help='the sampling method to use')
-    p.add_argument('--model', type=str, default='cc12m_1', choices=get_models(),
-                   help='the model to use')
-    p.add_argument('-n', type=int, default=1,
-                   help='the number of images to sample')
-    p.add_argument('--seed', type=int, default=0,
-                   help='the random seed')
-    p.add_argument('--size', type=int, nargs=2,
-                   help='the output image size')
-    p.add_argument('--starting-timestep', '-st', type=float, default=0.9,
-                   help='the timestep to start at (used with init images)')
-    p.add_argument('--steps', type=int, default=1000,
-                   help='the number of timesteps')
-    args = p.parse_args()
-
+def prepare(args):
     if args.device:
         device = torch.device(args.device)
     else:
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    print('Using device:', device)
 
     model = get_model(args.model)()
-    _, side_y, side_x = model.shape
-    if args.size:
-        side_x, side_y = args.size
+
     checkpoint = args.checkpoint
     if not checkpoint:
         checkpoint = MODULE_DIR / f'checkpoints/{args.model}.pth'
@@ -140,6 +98,18 @@ def main():
     normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
                                      std=[0.26862954, 0.26130258, 0.27577711])
     make_cutouts = MakeCutouts(clip_model.visual.input_resolution, args.cutn, args.cut_pow)
+
+    return device, model, clip_model, normalize, make_cutouts
+
+
+def sample(jid, args, model_data, callback=(lambda info: info), quiet=False):
+    sampling.set_logging_state(quiet)
+
+    device, model, clip_model, normalize, make_cutouts = model_data
+
+    _, side_y, side_x = model.shape
+    if args.size:
+        side_x, side_y = args.size
 
     if args.init:
         init = Image.open(utils.fetch(args.init)).convert('RGB')
@@ -198,19 +168,19 @@ def main():
         else:
             model_fn = model
         if args.method == 'ddpm':
-            return sampling.sample(model_fn, x, steps, 1., extra_args)
+            return sampling.sample(model_fn, x, steps, 1., extra_args, callback=callback)
         if args.method == 'ddim':
-            return sampling.sample(model_fn, x, steps, args.eta, extra_args)
+            return sampling.sample(model_fn, x, steps, args.eta, extra_args, callback=callback)
         if args.method == 'prk':
-            return sampling.prk_sample(model_fn, x, steps, extra_args)
+            return sampling.prk_sample(model_fn, x, steps, extra_args, callback=callback)
         if args.method == 'plms':
-            return sampling.plms_sample(model_fn, x, steps, extra_args)
+            return sampling.plms_sample(model_fn, x, steps, extra_args, callback=callback)
         if args.method == 'pie':
-            return sampling.pie_sample(model_fn, x, steps, extra_args)
+            return sampling.pie_sample(model_fn, x, steps, extra_args, callback=callback)
         if args.method == 'plms2':
-            return sampling.plms2_sample(model_fn, x, steps, extra_args)
+            return sampling.plms2_sample(model_fn, x, steps, extra_args, callback=callback)
         if args.method == 'iplms':
-            return sampling.iplms_sample(model_fn, x, steps, extra_args)
+            return sampling.iplms_sample(model_fn, x, steps, extra_args, callback=callback)
         assert False
 
     def run_all(n, batch_size):
@@ -224,11 +194,11 @@ def main():
             steps = steps[steps < args.starting_timestep]
             alpha, sigma = utils.t_to_alpha_sigma(steps[0])
             x = init * alpha + x * sigma
-        for i in trange(0, n, batch_size):
+        for i in trange(0, n, batch_size, disable=quiet):
             cur_batch_size = min(n - i, batch_size)
             outs = run(x[i:i+cur_batch_size], steps, clip_embed[i:i+cur_batch_size])
             for j, out in enumerate(outs):
-                utils.to_pil_image(out).save(f'out_{i + j:05}.png')
+                utils.to_pil_image(out).save(f'output/{jid}_{i + j:05}.png')
 
     try:
         run_all(args.n, args.batch_size)
@@ -237,4 +207,56 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument('prompts', type=str, default=[], nargs='*',
+                   help='the text prompts to use')
+    p.add_argument('--images', type=str, default=[], nargs='*', metavar='IMAGE',
+                   help='the image prompts')
+    p.add_argument('--batch-size', '-bs', type=int, default=1,
+                   help='the number of images per batch')
+    p.add_argument('--checkpoint', type=str,
+                   help='the checkpoint to use')
+    p.add_argument('--clip-guidance-scale', '-cs', type=float, default=500.,
+                   help='the CLIP guidance scale')
+    p.add_argument('--cutn', type=int, default=16,
+                   help='the number of random crops to use')
+    p.add_argument('--cut-pow', type=float, default=1.,
+                   help='the random crop size power')
+    p.add_argument('--device', type=str,
+                   help='the device to use')
+    p.add_argument('--eta', type=float, default=0.,
+                   help='the amount of noise to add during sampling (0-1)')
+    p.add_argument('--init', type=str,
+                   help='the init image')
+    p.add_argument('--method', type=str, default='ddpm',
+                   choices=['ddpm', 'ddim', 'prk', 'plms', 'pie', 'plms2', 'iplms'],
+                   help='the sampling method to use')
+    p.add_argument('--model', type=str, default='cc12m_1', choices=get_models(),
+                   help='the model to use')
+    p.add_argument('-n', type=int, default=1,
+                   help='the number of images to sample')
+    p.add_argument('--seed', type=int, default=0,
+                   help='the random seed')
+    p.add_argument('--size', type=int, nargs=2,
+                   help='the output image size')
+    p.add_argument('--starting-timestep', '-st', type=float, default=0.9,
+                   help='the timestep to start at (used with init images)')
+    p.add_argument('--steps', type=int, default=1000,
+                   help='the number of timesteps')
+
+    args = p.parse_args()
+
+    model_data = prepare(args)
+
+    jid = 0
+
+    def write_progress_update(info):
+        if info['i'] % 50 != 0: return
+
+        preds = info['pred'].cpu().numpy().astype(np.uint8)
+        for i in range(preds.shape[0]):
+            imname = f"./output/{jid}_{i:05}.png"
+            imwrite(imname, np.moveaxis(preds[i], 0, -1))
+
+    sample(jid, args, model_data, callback=write_progress_update)
