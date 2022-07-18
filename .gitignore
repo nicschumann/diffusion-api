@@ -6,3 +6,4 @@ out*
 *.egg-info
 *.ini
 .env
+.env.secret
