@@ -3,6 +3,12 @@ from tqdm.auto import trange
 
 from . import utils
 
+QUIET=False
+
+def set_logging_state(state):
+    global QUIET
+    QUIET = state
+
 
 # DDPM/DDIM sampling
 
@@ -15,7 +21,7 @@ def sample(model, x, steps, eta, extra_args, callback=None):
     alphas, sigmas = utils.t_to_alpha_sigma(steps)
 
     # The sampling loop
-    for i in trange(len(steps), disable=None):
+    for i in trange(len(steps), disable=QUIET):
 
         # Get the model output (v, the predicted velocity)
         with torch.cuda.amp.autocast():
@@ -59,7 +65,7 @@ def cond_sample(model, x, steps, eta, extra_args, cond_fn, callback=None):
     alphas, sigmas = utils.t_to_alpha_sigma(steps)
 
     # The sampling loop
-    for i in trange(len(steps), disable=None):
+    for i in trange(len(steps), disable=QUIET):
 
         # Get the model output
         with torch.enable_grad():
@@ -114,7 +120,7 @@ def reverse_sample(model, x, steps, extra_args, callback=None):
     alphas, sigmas = utils.t_to_alpha_sigma(steps)
 
     # The sampling loop
-    for i in trange(len(steps) - 1, disable=None):
+    for i in trange(len(steps) - 1, disable=QUIET):
 
         # Get the model output (v, the predicted velocity)
         with torch.cuda.amp.autocast():
@@ -193,7 +199,7 @@ def prk_sample(model, x, steps, extra_args, is_reverse=False, callback=None):
     model_fn = make_autocast_model_fn(model)
     if not is_reverse:
         steps = torch.cat([steps, steps.new_zeros([1])])
-    for i in trange(len(steps) - 1, disable=None):
+    for i in trange(len(steps) - 1, disable=QUIET):
         x, _, pred = prk_step(model_fn, x, steps[i] * ts, steps[i + 1] * ts, extra_args)
         if callback is not None:
             callback({'x': x, 'i': i, 't': steps[i], 'pred': pred})
@@ -209,7 +215,7 @@ def plms_sample(model, x, steps, extra_args, is_reverse=False, callback=None):
     if not is_reverse:
         steps = torch.cat([steps, steps.new_zeros([1])])
     old_eps = []
-    for i in trange(len(steps) - 1, disable=None):
+    for i in trange(len(steps) - 1, disable=QUIET):
         if len(old_eps) < 3:
             x, eps, pred = prk_step(model_fn, x, steps[i] * ts, steps[i + 1] * ts, extra_args)
         else:
@@ -248,7 +254,7 @@ def pie_sample(model, x, steps, extra_args, is_reverse=False, callback=None):
     model_fn = make_autocast_model_fn(model)
     if not is_reverse:
         steps = torch.cat([steps, steps.new_zeros([1])])
-    for i in trange(len(steps) - 1, disable=None):
+    for i in trange(len(steps) - 1, disable=QUIET):
         x, _, pred = pie_step(model_fn, x, steps[i] * ts, steps[i + 1] * ts, extra_args)
         if callback is not None:
             callback({'x': x, 'i': i, 't': steps[i], 'pred': pred})
@@ -264,7 +270,7 @@ def plms2_sample(model, x, steps, extra_args, is_reverse=False, callback=None):
     if not is_reverse:
         steps = torch.cat([steps, steps.new_zeros([1])])
     old_eps = []
-    for i in trange(len(steps) - 1, disable=None):
+    for i in trange(len(steps) - 1, disable=QUIET):
         if len(old_eps) < 1:
             x, eps, pred = pie_step(model_fn, x, steps[i] * ts, steps[i + 1] * ts, extra_args)
         else:
@@ -301,7 +307,7 @@ def iplms_sample(model, x, steps, extra_args, is_reverse=False, callback=None):
     if not is_reverse:
         steps = torch.cat([steps, steps.new_zeros([1])])
     old_eps = []
-    for i in trange(len(steps) - 1, disable=None):
+    for i in trange(len(steps) - 1, disable=QUIET):
         x, eps, pred = iplms_step(model_fn, x, old_eps, steps[i] * ts, steps[i + 1] * ts, extra_args)
         if len(old_eps) >= 3:
             old_eps.pop(0)
