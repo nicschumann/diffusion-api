@@ -16,7 +16,7 @@ from pydantic import BaseModel
 import clip_sample
 import cfg_sample
 from .auth import check_credentials
-from .models import ModelConfiguration, JobRequest, LogConfig
+from .models import ModelConfiguration, JobRequest, JobResponse, JobList, LogConfig
 from .config import VALID_SAMPLERS, MAX_QUEUE_LENGTH
 from .sampling import process_pending_queue
 
@@ -49,7 +49,7 @@ async def stop_background_processes():
 
 
 # routes
-@app.post("/jobs/new", status_code=status.HTTP_201_CREATED)
+@app.post("/jobs/new", status_code=status.HTTP_201_CREATED, response_model=JobResponse)
 async def prompt(job_request: JobRequest, credentials: HTTPBasicCredentials = Depends(check_credentials)):
     if jobs.qsize() >= MAX_QUEUE_LENGTH:
         raise HTTPException(
@@ -97,7 +97,7 @@ async def prompt(job_request: JobRequest, credentials: HTTPBasicCredentials = De
     return req
 
 
-@app.get("/jobs/{jid}/status")
+@app.get("/jobs/{jid}/status", response_model=JobResponse)
 async def job(jid : str, credentials: HTTPBasicCredentials = Depends(check_credentials)):
     try:
         job = completed[jid]
@@ -109,7 +109,7 @@ async def job(jid : str, credentials: HTTPBasicCredentials = Depends(check_crede
             detail="Job not found"
         )
 
-@app.get("/jobs/list")
+@app.get("/jobs/list", response_model=JobList)
 async def joblist(credentials: HTTPBasicCredentials = Depends(check_credentials)):
     jobs = completed.values()
     jobs = [*filter(lambda x: x['author'] == credentials.username, jobs)]
@@ -120,8 +120,9 @@ async def joblist(credentials: HTTPBasicCredentials = Depends(check_credentials)
     }
 
 
-@app.get("/jobs/{jid}/results/{index}.png")
-async def image(jid : str, index : int, credentials: HTTPBasicCredentials = Depends(check_credentials)):
+@app.get("/jobs/{jid}/results/{index}.png", response_class=FileResponse)
+async def image(jid : str, index : int,
+                credentials: HTTPBasicCredentials = Depends(check_credentials)):
     try:
         job = completed[jid]
         if job['status'] != 'Not Started':
